@@ -8,11 +8,16 @@ float vol(float block[BLOCK_SIZE]) {
 	float sum = 0;
 
 	for (unsigned n = 0; n < BLOCK_SIZE; n++) {
-		float m = fabs(block[n]) * n/BLOCK_SIZE;
+		//float m = fabs(block[n]);
+		float m = fabs(block[n]) * (float)n/BLOCK_SIZE;
+		//float m = fabs(block[n]) * powf((float)n/BLOCK_SIZE, 3);
         sum += m;
 	}
 
-	return sum / BLOCK_SIZE;
+	//return sum / BLOCK_SIZE; // flat
+	return sum / 511.5; // linear
+	//return sum / 341.f; // pow 2
+	//return sum / 255.f; // pow 3
 }
 
 // not used, leaving for future experimentation
@@ -98,7 +103,8 @@ float quant(float block[BLOCK_SIZE], float v) {
 	for (unsigned n = 0; n < BLOCK_SIZE; n++) {
         float sign = (block[n] < 0)? -1 : 1;
         block[n] = fabs(block[n]);
-        block[n] = round(round(v*block[n]/fac[n]) * fac[n]);
+        //block[n] = round(round(v*block[n]/fac[n]) * fac[n]);
+        block[n] = round(v*block[n]);
         block[n] *= sign;
 	}
 }

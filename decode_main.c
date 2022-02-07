@@ -42,7 +42,7 @@ void expand_int16_to_float(const int16_t in[BLOCK_SIZE], float out[BLOCK_SIZE]) 
 	}
 }
 
-bool read_block_compressed(uint8_t block[5*BLOCK_SIZE], float *factor) {
+size_t read_block_compressed(uint8_t block[5*BLOCK_SIZE], float *factor) {
 	uint32_t size;
 	int ret;
 
@@ -59,7 +59,7 @@ bool read_block_compressed(uint8_t block[5*BLOCK_SIZE], float *factor) {
 	//fprintf(stderr, "dec: read %d\n", ret);
 	if (ret < size) return false;
 
-	return true;
+	return size;
 }
 
 void decompress_block(uint8_t in[5*BLOCK_SIZE], size_t size, int16_t out[BLOCK_SIZE]) {
@@ -70,6 +70,33 @@ void decompress_block(uint8_t in[5*BLOCK_SIZE], size_t size, int16_t out[BLOCK_S
 	for (unsigned i = 0; i < BLOCK_SIZE && bitstream_read(&stream, &temp); i++) {
 		out[i] = temp;
 	}
+}
+
+size_t decompress_rle(const uint8_t in[5*BLOCK_SIZE], size_t size, uint8_t out[5*BLOCK_SIZE]) {
+	// TODO: proper bounds checking
+
+	size_t oidx = 0;
+
+	for (size_t i = 0; i < size; ) {
+		if (in[i] == 0) {
+			uint8_t count = in[i+1];
+			uint8_t cur   = in[i+2];
+
+			for (uint8_t k = 0; k < count; k++) {
+				out[oidx + k] = cur;
+			}
+
+			oidx += count;
+			i += 3;
+
+		} else {
+			out[oidx] = in[i];
+			oidx++;
+			i++;
+		}
+	}
+
+	return oidx;
 }
 
 int main(void) {
@@ -89,11 +116,15 @@ int main(void) {
 
 	int16_t ubuf[BLOCK_SIZE];
 	uint8_t compbuf[5*BLOCK_SIZE];
-	size_t sz;
+	uint8_t rle[5*BLOCK_SIZE];
+	size_t rsz;
 	float v;
 
-	for (unsigned i = 0; sz = read_block_compressed(compbuf, &v); i++) {
-		decompress_block(compbuf, sz, ubuf);
+	for (unsigned i = 0; rsz = read_block_compressed(rle, &v); i++) {
+		//fprintf(stderr, "have block: %lu bytes\n", rsz);
+		size_t csz = decompress_rle(rle, rsz, compbuf);
+		decompress_block(compbuf, csz, ubuf);
+		//decompress_block(rle, rsz, ubuf);
 		expand_int16_to_float(ubuf, in);
 		unquant(in, v);
 		mdct_decode(in, cur, out, next);
