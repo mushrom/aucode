@@ -18,6 +18,45 @@ int fread_full(void *ptr, size_t n, FILE *fp) {
 	return idx;
 }
 
+struct int16_channels {
+	uint32_t channels;
+	// pointer to int16_t[channels][BLOCK_SIZE]
+	int16_t **blocks;
+};
+
+void init_int16_channels(struct int16_channels *chans, uint32_t n) {
+	chans->channels = n;
+	chans->blocks = calloc(1, sizeof(int16_t*[n]));
+
+	for (uint32_t i = 0; i < n; i++) {
+		chans->blocks[i] = calloc(1, sizeof(int16_t[BLOCK_SIZE]));
+	}
+}
+
+struct int16_channels *create_int16_channels(uint32_t n) {
+	struct int16_channels *ret = malloc(sizeof(struct int16_channels));
+
+	if (!ret) return NULL;
+
+	init_int16_channels(ret, n);
+	return ret;
+}
+
+bool read_channel_blocks_s16le(struct int16_channels *buf) {
+	for (unsigned i = 0; i < BLOCK_SIZE; i++) {
+		for (uint32_t n = 0; n < buf->channels; n++) {
+			int amt = fread_full(buf->blocks[n] + i, 2, stdin);
+
+			if (amt != 2) {
+				// TODO: error
+				return false;
+			}
+		}
+	}
+
+	return true;
+}
+
 bool read_block_s16le(int16_t foo[BLOCK_SIZE]) {
 	size_t n = sizeof(int16_t[BLOCK_SIZE]);
 	int amt = fread_full(foo, n, stdin);
@@ -106,63 +145,70 @@ int main(int argc, char* argv[]) {
 		quality_factor = atof(argv[1]);
 	}
 
-	int16_t bufa[BLOCK_SIZE];
-	int16_t bufb[BLOCK_SIZE];
-	float  out[BLOCK_SIZE];
+	//int16_t bufa[BLOCK_SIZE];
+	//int16_t bufb[BLOCK_SIZE];
 
-	int16_t *cur  = bufa;
-	int16_t *next = bufb;
+	//int16_t *cur  = bufa;
+	//int16_t *next = bufb;
 
 	unsigned amt = 0;
 	unsigned reduced = 0;
 
-	read_block_s16le(cur);
-	for (unsigned i = 0; read_block_s16le(next); i++) {
-		int16_t buf[BLOCK_SIZE];
-		uint8_t comp[5*BLOCK_SIZE];
-		uint8_t rle[5*BLOCK_SIZE];
+	struct int16_channels *cur  = create_int16_channels(2);
+	struct int16_channels *next = create_int16_channels(2);
 
-		mdct_encode(cur, next, out);
-		//float v = quality_factor/sqrt(fmax(0.001, vol(out)));
-		//float va = sqrt(fmax(0.001, vol(out)));
-		float va = vol(out);
-		float v = fmin(10, quality_factor/va);
-		//float v = 32/diff_s16le(cur);
-		//float v = 5000/vol_s16le(cur);
-		//float v = 1;
-		//if (true && i % 5 == 0)
-		//fprintf(stderr, "enc: volume: %f, v: %f\n", va, v);
-		quant(out, v);
+	//read_block_s16le(cur);
+	//for (unsigned i = 0; read_block_s16le(next); i++) {
+	read_channel_blocks_s16le(cur);
+	for (unsigned i = 0; read_channel_blocks_s16le(next); i++) {
+		for (uint32_t chan = 0; chan < cur->channels; chan++) {
+			int16_t buf[BLOCK_SIZE];
+			uint8_t comp[5*BLOCK_SIZE];
+			uint8_t rle[5*BLOCK_SIZE];
+			float  out[BLOCK_SIZE];
 
-		amt += BLOCK_SIZE;
-		reduced += count_zeros(out);
+			mdct_encode(cur->blocks[chan], next->blocks[chan], out);
+			//float v = quality_factor/sqrt(fmax(0.001, vol(out)));
+			//float va = sqrt(fmax(0.001, vol(out)));
+			float va = vol(out);
+			float v = fmin(10, quality_factor/va);
+			//float v = 32/diff_s16le(cur);
+			//float v = 5000/vol_s16le(cur);
+			//float v = 1;
+			//if (true && i % 5 == 0)
+			//fprintf(stderr, "enc: volume: %f, v: %f\n", va, v);
+			quant(out, v);
 
-		condense_float_to_int16(out, buf);
-		size_t csz = compress_int16(buf, comp);
-		size_t rsz = compress_rle(comp, csz, rle);
-		write_compressed_block(rle, &v, rsz);
-		//write_compressed_block(comp, &v, csz);
-		//write_block_int16(buf);
-		//write_block_float(out);
+			amt += BLOCK_SIZE;
+			reduced += count_zeros(out);
 
-		int16_t *meh = cur;
-		cur = next;
-		next = meh;
+			condense_float_to_int16(out, buf);
+			size_t csz = compress_int16(buf, comp);
+			size_t rsz = compress_rle(comp, csz, rle);
+			write_compressed_block(rle, &v, rsz);
+			//write_compressed_block(comp, &v, csz);
+			//write_block_int16(buf);
+			//write_block_float(out);
 
-		if (true && i % 20 == 0) {
-			// debug output
-			unsigned secs = (i * BLOCK_SIZE) / 44100;
+			if (true && i % 20 == 0) {
+				// debug output
+				unsigned secs = (i * BLOCK_SIZE) / 44100;
 
-			fprintf(stderr, "block %u @ %02u:%02u (%u bytes)\n",
-					i, secs / 60, secs % 60,
-					sizeof(int16_t[BLOCK_SIZE])*i);
-			fprintf(stderr, "samples: %u, reduced: %u\n", amt, reduced);
-			fprintf(stderr, "%g%%\n", 100 * (float)reduced/(float)amt);
+				fprintf(stderr, "block %u @ %02u:%02u (%u bytes)\n",
+						i, secs / 60, secs % 60,
+						sizeof(int16_t[BLOCK_SIZE])*i);
+				fprintf(stderr, "samples: %u, reduced: %u\n", amt, reduced);
+				fprintf(stderr, "%g%%\n", 100 * (float)reduced/(float)amt);
 
-			amt /= 2;
-			reduced /= 2;
+				amt /= 2;
+				reduced /= 2;
+			}
 		}
 
+		//struct int16_channels *meh = cur;
+		void *meh = cur;
+		cur = next;
+		next = meh;
 	}
 
 	fprintf(stderr, "samples: %u, reduced: %u\n", amt, reduced);
