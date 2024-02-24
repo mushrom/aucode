@@ -1,3 +1,4 @@
+#set(CMAKE_C_FLAGS "-lm -O0 -g")
 set(CMAKE_C_FLAGS "-lm -O3")
 add_executable(encoder
 	encode_main.c

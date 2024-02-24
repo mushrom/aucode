@@ -94,12 +94,18 @@ struct float_channels *create_float_channels(uint32_t n) {
 	return ret;
 }
 
-bool read_channel_blocks_compressed(struct uint8_channels *buf, float *factors) {
+bool read_channel_blocks_compressed(struct uint8_channels *buf, float volumes[2][VOLUME_FACTORS]) {
+	static uint16_t foo[VOLUME_FACTORS];
+
 	for (uint32_t c = 0; c < buf->channels; c++) {
 		int amt;
 
-		amt = fread_full(factors + c, 4, stdin);
-		if (amt != 4) return false;
+		amt = fread_full(foo, sizeof(uint16_t[VOLUME_FACTORS]), stdin);
+		if (amt != sizeof(uint16_t[VOLUME_FACTORS])) return false;
+
+		for (size_t k = 0; k < VOLUME_FACTORS; k++) {
+			volumes[c][k] = uncompress_float_uint16(foo[k]);
+		}
 
 		amt = fread_full(buf->sizes + c, 4, stdin);
 		if (amt != 4) return false;
@@ -209,20 +215,8 @@ size_t decompress_rle(const uint8_t in[5*BLOCK_SIZE], size_t size, uint8_t out[5
 }
 
 int main(void) {
-	//float in[BLOCK_SIZE];
-	//float resa[BLOCK_SIZE];
-	//float resb[BLOCK_SIZE];
-	//int16_t out[BLOCK_SIZE];
-	
-	//memset(cur,  0, sizeof(resa));
-	//memset(next, 0, sizeof(resa));
-
-	unsigned amt = 0;
-	unsigned reduced = 0;
-
-	//uint8_t rle[5*BLOCK_SIZE];
 	size_t rsz;
-	float v[2];
+	float volumes[2][VOLUME_FACTORS];
 
 	struct float_channels *in   = create_float_channels(2);
 	struct float_channels *resa = create_float_channels(2);
@@ -230,13 +224,16 @@ int main(void) {
 	struct int16_channels *out  = create_int16_channels(2);
 
 	struct uint8_channels *rle  = create_uint8_channels(2);
-	//struct uint8_channels *compbuf = create_uint8_channels(2);
 
 	struct float_channels *cur  = resa;
 	struct float_channels *next = resb;
 
-	//for (unsigned i = 0; rsz = read_block_compressed(rle, &v); i++) {
-	for (unsigned i = 0; rsz = read_channel_blocks_compressed(rle, v); i++) {
+	unsigned lines = 1024;
+	unsigned curLine = 0;
+	FILE *fp = fopen("debug-out.ppm", "w");
+	fprintf(fp, "P3\n%u %u\n255\n", BLOCK_SIZE, lines);
+
+	for (unsigned i = 0; rsz = read_channel_blocks_compressed(rle, volumes); i++) {
 		for (uint32_t chan = 0; chan < rle->channels; chan++) {
 			int16_t ubuf[BLOCK_SIZE];
 			uint8_t compbuf[5*BLOCK_SIZE];
@@ -244,21 +241,36 @@ int main(void) {
 			//fprintf(stderr, "have block: %lu bytes\n", rsz);
 			size_t csz = decompress_rle(rle->blocks[chan], rle->sizes[chan], compbuf);
 			decompress_block(compbuf, csz, ubuf);
-			//decompress_block(rle, rsz, ubuf);
 			expand_int16_to_float(ubuf, in->blocks[chan]);
-			unquant(in->blocks[chan], v[chan]);
+			unquant(in->blocks[chan], volumes[chan]);
+
+			if (chan == 0 && curLine < lines) {
+				for (size_t k = 0; k < BLOCK_SIZE; k++) {
+					float sample = fabs(in->blocks[chan][k]);
+					int n = fmin(255, sample * 32);
+					int v = fabs(sample) * 8;
+					fprintf(fp, "%d %d %d ", v, n, n);
+				}
+				fprintf(fp, "\n");
+				fflush(fp);
+				curLine++;
+			}
+
+			if (fp && curLine >= lines) {
+				fclose(fp);
+				fp = NULL;
+			}
+
 			mdct_decode(in->blocks[chan],  cur->blocks[chan],
 			            out->blocks[chan], next->blocks[chan]);
 
 		}
 
-		//float *temp = cur;
 		void *temp = cur;
 		cur = next;
 		next = temp;
 
 		write_block_s16le_interleaved(out);
-		//write_block_s16le(out->blocks[0]);
 		//fprintf(stderr, "block %u (%u bbytes)\n", i, sizeof(int16_t[BLOCK_SIZE])*i);
 	}
 

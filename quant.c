@@ -4,20 +4,26 @@
 #include <stdio.h>
 #include <string.h>
 
-float vol(float block[BLOCK_SIZE]) {
-	float sum = 0;
+static float smoothstep(float v) {
+	return 3*v*v - 2*v*v*v;
+}
 
-	for (unsigned n = 0; n < BLOCK_SIZE; n++) {
-		//float m = fabs(block[n]);
-		float m = fabs(block[n]) * (float)n/BLOCK_SIZE;
-		//float m = fabs(block[n]) * powf((float)n/BLOCK_SIZE, 3);
-        sum += m;
+static float mix(float a, float b, float amt) {
+	return (1.0 - amt)*a + amt*b;
+}
+
+void vol(float block[BLOCK_SIZE], float v[VOLUME_FACTORS]) {
+	size_t inc = BLOCK_SIZE / VOLUME_FACTORS;
+
+	for (size_t n = 0; n < VOLUME_FACTORS; n++) {
+		float sum = 0;
+
+		for (size_t i = n * inc; i < (n+1) * inc; i++) {
+			sum += fabs(block[i]);
+		}
+
+		v[n] = sum/inc;
 	}
-
-	//return sum / BLOCK_SIZE; // flat
-	return sum / 511.5; // linear
-	//return sum / 341.f; // pow 2
-	//return sum / 255.f; // pow 3
 }
 
 // not used, leaving for future experimentation
@@ -73,45 +79,32 @@ float diff_s16le(int16_t block[BLOCK_SIZE]) {
     return sum/DIV;
 }
 
-void dim_harmonics(float block[BLOCK_SIZE], float fac[BLOCK_SIZE]) {
-    for (unsigned n = 0; n < BLOCK_SIZE; n++) {
-        fac[n] = 1.0;
-    }
-
-    for (unsigned n = 2; n < BLOCK_SIZE; n++) {
-        for (unsigned k = n*2; k < BLOCK_SIZE; k *= 2) {
-            //fac[k] += block[n] * ((float)k/BLOCK_SIZE);
-            //fac[k] += block[n] * powf((float)k/BLOCK_SIZE, 2);
-            //fac[k] += block[n] * sqrtf((float)k/BLOCK_SIZE);
-
-            // amplifying opposite sign freqs and dimming same sign seems to work ok
-            float a = (block[n] > 0)? 1 : -1;
-            float b = (block[k] > 0)? 1 : -1;
-
-            //fac[k] += (a*b)*(block[n] * powf(((float)(k)/BLOCK_SIZE), 2));
-            fac[k] += (a*b)*(block[n] * powf(((float)(k-n)/BLOCK_SIZE), 2));
-            //fac[k] += block[n] * powf(((float)(k-n)/BLOCK_SIZE), 2);
-        }
-    }
+float cur_volume(size_t n, float v[VOLUME_FACTORS]) {
+	size_t meh = BLOCK_SIZE / VOLUME_FACTORS;
+	float amt = (float)n/meh - n/meh;
+	size_t hmm = (n/meh + 1 >= VOLUME_FACTORS)? VOLUME_FACTORS - 1 : n/meh + 1;
+	//float samp = mix(v[n/meh], v[hmm], smoothstep(amt));
+	float samp = mix(v[n/meh], v[hmm], amt);
+	return samp;
 }
 
-float quant(float block[BLOCK_SIZE], float v) {
+float quant(float block[BLOCK_SIZE], float v[VOLUME_FACTORS]) {
     float fac[BLOCK_SIZE];
-
-    dim_harmonics(block, fac);
+	size_t inc = BLOCK_SIZE / VOLUME_FACTORS;
 
 	for (unsigned n = 0; n < BLOCK_SIZE; n++) {
-        float sign = (block[n] < 0)? -1 : 1;
-        block[n] = fabs(block[n]);
-        //block[n] = round(round(v*block[n]/fac[n]) * fac[n]);
-        block[n] = round(v*block[n]);
-        block[n] *= sign;
+		float curvol = cur_volume(n, v);
+		block[n] = (curvol == 0)? 0.f : block[n]/curvol;
 	}
 }
 
-float unquant(float block[BLOCK_SIZE], float v) {
+float unquant(float block[BLOCK_SIZE], float v[VOLUME_FACTORS]) {
+	size_t inc = BLOCK_SIZE / VOLUME_FACTORS;
+
 	for (unsigned n = 0; n < BLOCK_SIZE; n++) {
-        block[n] = block[n]/v;
+		float curvol = cur_volume(n, v);
+		block[n] = block[n]*curvol;
+		//block[n] = block[n]*v[n / inc];
 	}
 }
 
@@ -119,6 +112,15 @@ unsigned count_zeros(float block[BLOCK_SIZE]) {
 	unsigned ret = 0;
 	for (unsigned n = 0; n < BLOCK_SIZE; n++) {
 		ret += ((unsigned)(fabs(block[n])) == 0);
+	}
+
+	return ret;
+}
+
+unsigned count_zeros_int16(int16_t block[BLOCK_SIZE]) {
+	unsigned ret = 0;
+	for (unsigned n = 0; n < BLOCK_SIZE; n++) {
+		ret += block[n] == 0;
 	}
 
 	return ret;
